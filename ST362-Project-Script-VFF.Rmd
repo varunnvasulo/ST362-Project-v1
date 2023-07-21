@@ -1,0 +1,186 @@
+---
+title: "ST362 Project - Data Creation"
+author: "Varunn Vasulo, Adam Farber, Blaine Heimbecker, Jadon Skinner"
+date: "`r format(Sys.time(), '%a %b, %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+header-includes:
+- \usepackage{hyperref}
+- \usepackage{fontawesome}
+- \usepackage{graphicx}
+- \usepackage[medium]{titlesec}
+- \usepackage{listings}
+geometry: margin=1in
+fontfamily: libertine
+fontsize: 8pt
+spacing: double
+endnote: no
+fig_width: 5
+fig_height: 4
+---
+
+```{r, echo = FALSE, message= FALSE, warning = FALSE}
+library(tidyverse)
+library(stats)
+library(ggplot2)
+library(broom)
+library(car)
+library(knitr)
+library(corrgram)
+library(readr)
+library(gridExtra)
+library(MASS)
+```
+
+# Loading in Data
+
+```{r}
+DATA <- read.csv("/Users/adamfarber/Desktop/2022-2023 NBA Player Stats - Regular.csv")
+# Here we are loading in the 2022-2023 NBA player data which we found on Kaggle and indexing the data based on predictors that we feel need to be included in the model based on our basketball intuition.
+DATA_NBA23<-DATA[c("Pos","PTS","MP","AST","TRB","STL","BLK","TOV","FG.","FT.","eFG.")]
+```
+
+The data we have inputted can be interpreted as follows: 
+- POS = player position
+- PTS = player points
+- MP = minutes played
+- AST = player assists
+- TRB = total player rebounds
+- STL = player steals
+- BLK = player blocks
+- TOV = player turnovers
+- FG = field goal percentage
+- FT = free throw percentage
+- eFG = effective field goal percentage (weighted field goal percentage of 2 and 3 point field goals)
+
+## Turning the Position variable into three categories (either Center, Forward or Guard)
+
+```{r}
+# Create a vector with the original positions
+positions <- c("C", "PF", "PF-SF", "PG", "SF", "SF-SG", "SG", "SGPG")
+
+# Create a function to categorize the positions
+categorize_pos <- function(position) {
+  if (position %in% c("PG","SG","SG-PG")) {
+    return("G")
+  } else if (position %in% c("SF", "PF", "PF-SF", "SF-SG")) {
+    return("F")
+  } else {
+    return(position)
+  }
+}
+DATA_NBA23$Pos <- sapply(DATA_NBA23$Pos, categorize_pos)
+```
+
+## Effect of combining the position variable into G,F,C
+
+```{r}
+ggplot(DATA_NBA23) +
+    aes(x = Pos, y = AST) +
+    geom_boxplot()
+
+# When we combine positions, we can see that assists and blocks are different for each group, which leads us to believe that it might be important to distinguish player position in the model 
+
+# Lets see how combining the categorical predictor affected our variables
+ggplot(DATA_NBA23) +
+    aes(y = PTS , x = BLK , colour = Pos) +
+    geom_point() +
+    geom_smooth(method = "lm", se = TRUE, formula = y ~ x)
+
+```
+
+## Creating a dummy variable for postion
+
+```{r}
+# In order to use our new position variables lets create a dummy variable 
+DATA_NBA23$Pos <- sapply(DATA_NBA23$Pos, categorize_pos)
+dummy_variables <- model.matrix(~ Pos - 1, data = DATA_NBA23)
+dummy_variables <- dummy_variables[, -1]
+DATA_NBA23$Pos <- NULL
+DATA_NBA23 <- cbind(DATA_NBA23, dummy_variables)
+```
+
+## Analyzing correlation between predictors
+
+```{r}
+correlation<-cor(DATA_NBA23)
+#FG and eFG. are highly correlated variables with a cor. over .9. TOV and Assist are also highly correlated lets look at a some graphs to justify. 
+ggplot(DATA_NBA23, aes(x = FG., y = eFG.)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+  labs(title = "Scatter Plot") +
+  theme_minimal()
+ggplot(DATA_NBA23, aes(x = TOV, y = AST)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+  labs(title = "Scatter Plot") +
+  theme_minimal()
+#We think it is justifiable to make the coefficient of eFG. zero because having field goal in the model seems to be representative of its contribution to points.
+Model<- lm(PTS~. - eFG. , data=DATA_NBA23)
+Check_model<-summary(Model)
+```
+
+## Checking for polynomial fit
+
+```{r}
+# Below we graphed all predictors against points in a scatter plot to see if a polynomial relationship fits.
+ggplot(DATA_NBA23, aes(x = MP, y = PTS)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "green", size = 1) +
+  labs(title = "Scatter Plot of MPG and PTS",
+       x = "MPG",
+       y = "PTS") +
+  theme_minimal()
+# We can see  MP is non-linear. The curved line looks a lot better then the straight red line. Lets add minutes played (MP) as a polynomial in the model. This also makes sense intuitively since better players will play more minutes and will thus score more points. 
+Model<- lm(PTS~. - eFG. - MP + poly(MP,2), data=DATA_NBA23)
+coefficients(Model)
+```
+
+## Finally now that we have added our 3 features, lets simulate a new response
+
+```{r}
+DATA_NBA23$MP2 <- DATA_NBA23$MP^2
+X <- as.matrix(DATA_NBA23[, c("AST", "TRB", "STL","BLK","TOV","FG.","FT.","PosF","PosG","MP","MP2")])
+y <- as.matrix(DATA_NBA23[, "PTS"])
+X <- cbind(1, X)
+beta <- solve(t(X) %*% X) %*% t(X) %*% y
+PTSNEW <- X %*% beta
+PTSNEW <- X %*% beta
+PTSNEW[PTSNEW < 0] <- 0
+
+#lets see if our model predicted points well.
+ggplot(DATA_NBA23, aes(x = PTS, y = PTSNEW)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+  labs(title = "Scatter Plot") +
+  theme_minimal()
+#looks like our mode did a good job at predicting points when comparing to the original data.
+```
+
+## Finally lets create our new DATA_NBA23 set and finalize our data creation
+
+```{r}
+DATA_NBA23$MP2<-NULL
+DATA_NBA23$PosF<-NULL
+DATA_NBA23$PosG<-NULL
+DATA_NBA23$Pos <- sapply(DATA$Pos, categorize_pos)
+DATA_NBA23$PTS <- PTSNEW
+# Write the simulated_DATA_NBA23 DATA_NBA23 frame to a CSV file
+write.csv(DATA_NBA23,"ST362_NBA23.csv", row.names = FALSE)
+```
+
+The data generation process for this model involved 3 steps:
+
+1.  Combining categorical predictors into dummy variables to be used in the model
+2.  Evaluating 2 highly correlated predictors with one having a coefficient of 0
+3.  Evaluating a polynomial fit within the model
+
+We first combined the categorical predictors into fewer groups and then created dummy variables. This involved categorizing the positions into 3 buckets to improve the efficiency of our model. Next, we analysed the predictors present in our data set for correlation, it was noted that eFG. and FG. had a high correlation. Since eFG. was highly correlated with FG., it was redundant to have both predictors in the model therefore we gave eFG. a coefficient of 0.  Finally, we plotted our predictors against all the response variables and looked for non-linear relationships within the data. Our findings revealed a quadratic relationship between PTS\~MP which we included within our final model. This was the final model used to create the new response variable (PTS):
+
+$$
+PTS = -1.46 + 0.02MP^2 - 0.15MP - .40AST + 0.05TRB - 1.81STL + 0.06BLK + 3.18TOV + 3.67FG. + 2.78FT. + 0.50PosF + 0.92PosG + 0*eFG.
+$$

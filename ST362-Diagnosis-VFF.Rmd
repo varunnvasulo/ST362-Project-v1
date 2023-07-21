@@ -1,0 +1,207 @@
+---
+title: "ST362 Project - Diagnosing Data"
+author: "Varunn Vasulo, Adam Farber, Blaine Heimbecker, Jadon Skinner"
+date: "`r format(Sys.time(), '%a %b, %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+header-includes:
+- \usepackage{hyperref}
+- \usepackage{fontawesome}
+- \usepackage{graphicx}
+- \usepackage[medium]{titlesec}
+- \usepackage{listings}
+geometry: margin=1in
+fontfamily: libertine
+fontsize: 8pt
+spacing: double
+endnote: no
+fig_width: 5
+fig_height: 4
+---
+
+```{r, echo = FALSE, message= FALSE, warning = FALSE}
+library(tidyverse)
+library(stats)
+library(ggplot2)
+library(broom)
+library(car)
+library(knitr)
+library(corrgram)
+library(readr)
+library(gridExtra)
+library(MASS)
+```
+
+This notebook and corresponding files/data have been uploaded to Github and can be viewed \href{https://github.com/varunnvasulo/ST362-Project-v1}{here}
+
+# Diagnosing Data
+
+### Loading in generated data
+
+```{r, echo = FALSE, message= FALSE, out.width = "50%", fig.align = 'center', fig.show = "hold"}
+data <- read.csv("/Users/adamfarber/Desktop/ST362_NBA23.csv")
+head(data)
+```
+
+### Creating a base linear model with all predictors 
+
+This would be the baseline assumption when someone loads up the data set.
+
+```{r}
+# Assuming that all predictors are used in the model
+model <- lm(PTS~.,data = data)
+```
+
+## Categorical Predictor
+
+To analyse whether or not some of the categories have been combined in the data creation process, lets create dummy variables and see what affects this has on the model. We will create a model that doesn't include the categorical predictors and perform an ANOVA test to see whether the addition of the categorical variables provides better fit.
+
+```{r}
+# Now lets try and determine if creating a dummy variable improves the model
+
+dummy_variables <- model.matrix(~ Pos - 1, data = data)
+dummy_variables <- dummy_variables[, -1]
+data_dummies <- cbind(data, dummy_variables)
+data_dummies$Pos <- NULL
+model_v2 <- lm(PTS ~. , data=data_dummies)
+model_no_categorical <- lm(PTS ~. -Pos, data = data)
+anova(model_v2, model_no_categorical)
+```
+
+Here we observe a significant F-test in the ANOVA output for the model with categorical predictors vs without. From this we can conclude that the categorical predictors have statistical contribution in predicting the response variable (PTS). Thus, we can conclude that they likely combined the categorical variables and simulated points as a function of dummy variables.
+
+## Highly Correlated Predictors With Coefficient Of 0
+
+```{r, warning = FALSE}
+# View correlated pairs throughout the dataset
+corrgram(data, order=TRUE, upper.panel=panel.cor)
+```
+
+Notable pairs: PTS\~MP, PTS\~TOV, FG\~eFG.
+
+When looking at these highly correlated pairs many of them are in relation to the PTS variable which is our chosen response, we are looking for correlation between predictors. The one that stands out the most is FG.\~eFG.
+
+It is noted that eFG. doesn't have a significant p-value in the summary table of our model output
+
+```{r, }
+model1 <- lm(PTS~., data = data_dummies)
+model2 <- lm(PTS~.-eFG., data = data_dummies)
+summary(model1)
+summary(model2)
+```
+
+Comparing both summary tables reveals an identical r\^2 value with and without the eFG. therefore we can conclude that the addition of the predictor is unnecessary and over complicates the model. This is further shown by eFG. having a p-value greater than 0.05. 
+
+Thus we have found 2 highly correlated variables but one of which does not have significant impact in predicting the response variable. We can conclude that the final model would have this variable as a coefficient of 0 as it is using up degrees of freedom and doesn't contribute to a significantly better fit.
+
+## Testing for Polynomial Predictors
+
+```{r, fig.align = 'center', message = FALSE}
+# Here we plotted all of the predictors vs. points to see whether or not any of them had polynomial fit. Here are 2 examples of the predictors that could have a polynomial fit.
+plot1 <- ggplot(data = data_dummies, aes(x = MP, y = PTS)) + geom_point() + theme_minimal()
+plot2<- ggplot(data = data_dummies, aes(x = TOV, y = PTS)) + geom_point() + theme_minimal()
+grid.arrange(plot1, plot2, ncol=2, nrow=1)
+```
+
+### Notable relationships are:
+
+-   PTS vs. MP exhibits a quadratic relationship
+
+-   PTS vs. TOV exhibits a linear relationship
+
+Testing the two models to observe a better fit.
+
+```{r}
+model
+#Create a model with MP as a 2nd degree polynomial
+model4 <- lm(PTS~.-MP + poly(MP,2), data = data_dummies)
+anova(model4,model)
+summary(model4)
+```
+
+Analyzing the anova table we can observe a significant P-value along with a significant F-statistic. From this we can conclude that the addition of a polynomial relationship is contributing to a better fit in the model.
+
+Observing the summary output indicates a similar result. The $R^2$ value has increased to $0.995$ from $0.96$ indicating the new model explains more of the variance in the response variable. This also makes sense given the context of the problem as when a player plays more minutes they are likely a better player and will thus score more points. 
+
+## Outliers in Multiple Dimensions
+
+Conducting some analysis on residuals.
+
+```{r}
+plot(model4, 4)
+plot(model4,1)
+residuals <- rstandard(model4)
+residuals_outliers <- residuals[residuals > 3 | residuals < -3]
+print("% Of Outliers")
+100 * (length(residuals_outliers) / length(residuals))
+
+cooks_distance <- cooks.distance(model4)
+
+influential_observations <- cooks_distance[cooks_distance > 1]
+influential_observations
+```
+
+It can be observed that there are outliers on both the Residuals vs Fitted plot and on the Cook's Distance plot. Since they can be observed on both plots we can conclude that outliers in multiple dimensions have not been included within this data set.
+
+## Unstable Variance
+
+```{r}
+plot(model4, 3)
+```
+
+When analyzing the scale-location plot the observations are evenly distributed. Therefore we can conclude that there isn't unstable variance in the response vector.
+
+## Correlated Errors
+
+Let's look for correlated errors within our dataset and model.
+
+```{r}
+# Perform the Durbin-Watson test
+dw <- durbinWatsonTest(model4)
+dw
+```
+
+It can be observed that the D-W test statistic in our predicted model is 1.81. Since this is within the range of $1.5<1.81<2.5$ we can conclude that the D-W test statistic is indicative of the presence of some autocorrelation.
+
+It should be noted that since there is a absence of time series data the presence of autocorrelation is not meaningful to the model. However on a small scale the performance of players on the same team are correlated as they are only so many minutes and positions in a total game which could be causing our observed D_W stat. On a larger scale with over 650 player any autocorrelation that does exist is not meaningful and is very unlikely. Therefore we can logically conclude that the performance of one player does not meaningfully the performance of another player. 
+
+## One of the predictors is log transformed
+
+```{r}
+ggplot(data_dummies, aes(x = FG., y = PTS)) +
+  geom_point() +
+  ggtitle("Scatter Plot: Predictor_x vs. Response")
+
+# Creating scatter plots for all of the predictors against points we can see that there is no logarithmic relationship. Intuitively, it also doesn't make sense in the context of the problem for their to be any logarithmic relationship between any of the predictors and points.
+```
+
+## The Response is Log Transformed
+
+```{r}
+data_2 <- data_dummies
+#Since some players have 0 points then it would be impossible for their to be a log relationship on the response variable as the log(0) DNE. Despite this proving there likely wasn't any log transform on the response, we added a very small amount to points so that we could test a model where the response was log transformed.
+data_2$PTS <- data$PTS + 0.000000001
+model4_v2 <- lm(PTS~.-MP + poly(MP,2), data = data_2)
+
+test_model <- lm(log(PTS) ~., data=data_2)
+summary(test_model)
+```
+
+Furthermore, we can see that the adjusted R-squared of the model with the response variable log transformed is much worse than the model without. Also the response variable being log transformed does not make sense intuitively given the context of the problem.
+
+## Conclusion of Diagnoses
+
+1)    The model likely used dummy variables in order to represent the categorical predictor as it helped provide a better overall fit
+
+2)    When testing for correlation, we found that eFG. and FG. are highly correlated. Upon further analysis we found that eFG. did not significantly contribute to the model. Thus, they included 2 highly correlated predictors, one with a coefficient of zero.
+
+3)    Upon graphing scatter plots of the predictors against points, we found a quadratic relationship between MP and PTS. Considering this also makes sense logically, they likely included a MP^2 in the model to generate the new response variable.
+
+Therefore we can conclude that the final estimated model would likely be:
+
+$$
+PTS = {\beta_{0}}+ {\beta_{1}}MP^2 + \beta_2MP + \beta_3AST + \beta_4TRB + \beta_5STL + \beta_6BLK + \beta_7TOV + \beta_8FG. + \beta_9FT. + \beta_{10P}osF + \beta_{11}PosG + 0*eFG.
+$$
